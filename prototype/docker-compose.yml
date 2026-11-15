@@ -1,0 +1,56 @@
+# AI Fleet Hub - Stage 0 deliverable #1: runnable minimal technical prototype
+#
+# Reference deployment (plan v0.2.6 §23). Versions are frozen in
+# docs/ENVIRONMENT.md. The api service runs the modular monolith; Postgres
+# and Valkey are the production adapters for the storage and message-bus
+# modules (the prototype runs without them, on SQLite + in-process bus).
+services:
+  api:
+    build: .
+    environment:
+      AI_FLEET_DB: "sqlite:///data/fleet.db"
+      AI_FLEET_API_KEY: "${AI_FLEET_API_KEY:-dev-key-change-me}"
+      AI_FLEET_HOST: "0.0.0.0"
+      AI_FLEET_PORT: "8000"
+    ports:
+      - "8000:8000"
+    volumes:
+      - fleet-data:/data
+    depends_on:
+      - postgres
+      - valkey
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  postgres:
+    image: postgres:18.7-alpine
+    environment:
+      POSTGRES_USER: fleet
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-fleet-dev-only}"
+      POSTGRES_DB: fleet
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fleet -d fleet"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  valkey:
+    image: valkey/valkey:9.1.2-alpine
+    command: ["valkey-server", "--appendonly", "yes"]
+    volumes:
+      - valkey-data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  fleet-data:
+  pg-data:
+  valkey-data:

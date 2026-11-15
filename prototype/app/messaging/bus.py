@@ -1,0 +1,50 @@
+"""Module 4 - Message Bus (in-process implementation).
+
+Interface the Valkey-backed bus will implement. Delivery is at-least-once:
+publish() may be called again with the same envelope (retry); the store
+dedups on idempotency_key, so a duplicate delivery is a no-op that returns
+the already-stored message. This is how principle 5 (no duplicate side
+effects from duplicate messages) is enforced.
+"""
+from app import storage as db
+from app.messaging import build_envelope
+
+
+class MessageBus:
+    def publish(self, envelope: dict) -> dict:
+        """Store a message. Returns {"stored": bool, "message": dict}.
+        stored=False means this exact delivery was already seen."""
+        stored = db.insert_message(envelope)
+        if stored:
+            return {"stored": True, "message": envelope}
+        return {"stored": False, "message": db.get_message_by_key(envelope["idempotency_key"])}
+
+    def send(
+        self,
+        *,
+        tenant_id: str,
+        sender_agent_id: str,
+        recipient_agent_id: str,
+        task_id: str,
+        event_type: str,
+        payload: dict,
+    ) -> dict:
+        envelope = build_envelope(
+            tenant_id=tenant_id,
+            sender_agent_id=sender_agent_id,
+            recipient_agent_id=recipient_agent_id,
+            task_id=task_id,
+            event_type=event_type,
+            payload=payload,
+        )
+        return self.publish(envelope)
+
+    def republish(self, envelope: dict) -> dict:
+        """Retry a delivery with the same envelope (same idempotency key)."""
+        return self.publish(envelope)
+
+    def list_for_task(self, task_id: str):
+        return db.list_messages(task_id)
+
+
+bus = MessageBus()
