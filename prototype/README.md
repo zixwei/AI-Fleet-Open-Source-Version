@@ -1,6 +1,6 @@
-# AI Fleet Hub — Stage 0 prototype (deliverable #1)
+# Agent Fleet Hub — Stage 0 prototype (deliverable #1)
 
-Runnable minimal technical prototype for the AI Fleet cross-vendor agent
+Runnable minimal technical prototype for the Agent Fleet cross-vendor agent
 collaboration platform (plan v0.2.6 §25 #1). Modular monolith (§4): six
 logical modules as packages, one deployable process.
 

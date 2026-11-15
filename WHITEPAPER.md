@@ -1,4 +1,4 @@
-# AI Fleet — Cross-Vendor Agent Collaboration Platform
+# Agent Fleet — Cross-Vendor Agent Collaboration Platform
 
 ## Whitepaper
 
@@ -6,7 +6,7 @@
 **Date:** 2026-11-14
 **Status:** Stage 0 (technical validation) approved and in progress
 **License (proposed):** Apache License 2.0 (to be confirmed)
-**Repository:** https://github.com/zixwei/AI-Fleet-Open-Source-Version
+**Repository:** https://github.com/zixwei/Agent-Fleet-Open-Source-Version
 
 ---
 
