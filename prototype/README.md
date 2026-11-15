@@ -53,7 +53,26 @@ curl -s -X POST localhost:8000/tasks -H "X-API-Key: $KEY" \
 
 ## Fixes (Stage 0 baseline, Cue T01/T08)
 
-- **T01 delivery receipt (formal T01 acceptance)** — `POST
+- **T01 agent identity (formal end-to-end)** — agent credentials
+  (`AI_FLEET_AGENT_API_KEYS`: key -> `{agent_id, tenant_id}`). Each
+  agent has its own credential, never shared between agents; a credential
+  is live only while its agent is registered and Active (suspending the
+  agent revokes it). `POST /tasks/{id}/messages/{message_id}/receipt`
+  now requires an agent credential: the receipt identity is derived from
+  the authenticated principal, never trusted from the request-body field
+  (a body value that disagrees is 400). A tenant key alone cannot receipt
+  (401), another agent's credential cannot receipt the message (403),
+  revoked/suspended/unregistered credentials are 401, cross-tenant is
+  404. Sending with an agent credential binds the sender to that agent
+  (403 on mismatch). Verified live by two independent agent processes,
+  each with its own credential, exchanging 100 rounds over HTTP:
+  200/200 messages, 200/200 receipts.
+- **Audit chain under concurrency** — `record()` read the previous hash
+  and inserted the entry in two separate connections, so concurrent
+  appends forked the chain (`/audit/verify` broke at seq 59 in the
+  two-process test). The append is now one BEGIN IMMEDIATE transaction
+  (read prev + insert), with a regression test hammering it from 8
+  threads x 25 appends.
   /tasks/{id}/messages/{message_id}/receipt` with
   `{"recipient_agent_id": "..."}` lets the receiving agent confirm
   delivery. Routing metadata only proves the hub stored the message; the

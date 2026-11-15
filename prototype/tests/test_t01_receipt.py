@@ -5,12 +5,15 @@ metadata (100/100) only proves the hub stored the message, not that the
 recipient got it. The receipt endpoint closes that gap:
 
   POST /tasks/{task_id}/messages/{message_id}/receipt
-  {"recipient_agent_id": "<the message's recipient>"}
 
-Duplicate receipts are no-ops (stored=false, same receipt). Unknown
-message, message on another task, or cross-tenant message all return 404;
-a caller that is not the message's recipient returns 400. GET
-/tasks/{task_id}/messages carries each message's receipt (null if none).
+The acting identity comes from the caller's AGENT credential
+(X-API-Key: an agent key); a tenant key alone cannot receipt (401).
+The request body may carry recipient_agent_id as a cross-check only and
+is never trusted on its own. Duplicate receipts are no-ops
+(stored=false, same receipt). Unknown message, message on another task,
+or cross-tenant message all return 404; a credential for another agent
+returns 403. GET /tasks/{task_id}/messages carries each message's
+receipt (null if none).
 
 Run:  python -m pytest tests/test_t01_receipt.py -q
 """
@@ -26,8 +29,16 @@ from fastapi.testclient import TestClient
 os.environ["AI_FLEET_DB"] = "sqlite:////tmp/ai_fleet_t01_receipt.db"
 
 TENANT_KEYS = {"key-a": "tenant-a", "key-b": "tenant-b"}
+AGENT_KEYS = {
+    "key-agent-a": {"agent_id": "agent-a", "tenant_id": "tenant-a"},
+    "key-agent-b": {"agent_id": "agent-b", "tenant_id": "tenant-a"},
+    "key-agent-b-t2": {"agent_id": "agent-b", "tenant_id": "tenant-b"},
+}
 HEADERS_A = {"X-API-Key": "key-a"}
 HEADERS_B = {"X-API-Key": "key-b"}
+HEADERS_AGENT_A = {"X-API-Key": "key-agent-a"}
+HEADERS_AGENT_B = {"X-API-Key": "key-agent-b"}
+HEADERS_AGENT_B_T2 = {"X-API-Key": "key-agent-b-t2"}
 
 
 @pytest.fixture(autouse=True)
@@ -35,6 +46,7 @@ def fresh_db(tmp_path, monkeypatch):
     db_path = tmp_path / "t01_receipt.db"
     monkeypatch.setenv("AI_FLEET_DB", f"sqlite:///{db_path}")
     monkeypatch.setenv("AI_FLEET_TENANT_API_KEYS", json.dumps(TENANT_KEYS))
+    monkeypatch.setenv("AI_FLEET_AGENT_API_KEYS", json.dumps(AGENT_KEYS))
     import app.config as config
 
     config.DATABASE_PATH = str(db_path)
@@ -75,8 +87,12 @@ def _send(client, task_id, sender, recipient):
     return r.json()["message"]
 
 
+def _receipt_url(task_id, message_id):
+    return f"/tasks/{task_id}/messages/{message_id}/receipt"
+
+
 def test_receipt_round_trip_visible_in_list():
-    """B receipts A's message; GET messages shows the receipt on it."""
+    """B receipts A's message with B's own credential; GET shows it."""
     from app.main import app
 
     client = TestClient(app)
@@ -89,9 +105,9 @@ def test_receipt_round_trip_visible_in_list():
     assert msgs[0]["receipt"] is None
 
     r = client.post(
-        f"/tasks/{task_id}/messages/{message['message_id']}/receipt",
-        json={"recipient_agent_id": "agent-b"},
-        headers=HEADERS_A,
+        _receipt_url(task_id, message["message_id"]),
+        json={},
+        headers=HEADERS_AGENT_B,
     )
     assert r.status_code == 200, r.text
     assert r.json()["stored"] is True
@@ -114,29 +130,46 @@ def test_receipt_is_idempotent():
     client = TestClient(app)
     task_id = _setup_task(client)
     message = _send(client, task_id, "agent-a", "agent-b")
-    url = f"/tasks/{task_id}/messages/{message['message_id']}/receipt"
-    first = client.post(url, json={"recipient_agent_id": "agent-b"}, headers=HEADERS_A).json()
+    url = _receipt_url(task_id, message["message_id"])
+    first = client.post(url, json={}, headers=HEADERS_AGENT_B).json()
     assert first["stored"] is True
-    second = client.post(url, json={"recipient_agent_id": "agent-b"}, headers=HEADERS_A)
+    second = client.post(url, json={}, headers=HEADERS_AGENT_B)
     assert second.status_code == 200
     assert second.json()["stored"] is False
     assert second.json()["receipt"] == first["receipt"]
 
 
-def test_receipt_wrong_recipient_rejected():
-    """The sender (A) cannot receipt a message addressed to B: 400."""
+def test_receipt_wrong_agent_credential_rejected():
+    """Agent A's credential cannot receipt a message addressed to B: 403."""
     from app.main import app
 
     client = TestClient(app)
     task_id = _setup_task(client)
     message = _send(client, task_id, "agent-a", "agent-b")
     r = client.post(
-        f"/tasks/{task_id}/messages/{message['message_id']}/receipt",
-        json={"recipient_agent_id": "agent-a"},
+        _receipt_url(task_id, message["message_id"]),
+        json={},
+        headers=HEADERS_AGENT_A,
+    )
+    assert r.status_code == 403
+    # And no receipt was recorded.
+    msgs = client.get(f"/tasks/{task_id}/messages", headers=HEADERS_A).json()
+    assert msgs[0]["receipt"] is None
+
+
+def test_receipt_requires_agent_credential():
+    """A tenant key alone cannot receipt: 401 (identity must be an agent)."""
+    from app.main import app
+
+    client = TestClient(app)
+    task_id = _setup_task(client)
+    message = _send(client, task_id, "agent-a", "agent-b")
+    r = client.post(
+        _receipt_url(task_id, message["message_id"]),
+        json={"recipient_agent_id": "agent-b"},
         headers=HEADERS_A,
     )
-    assert r.status_code == 400
-    # And no receipt was recorded.
+    assert r.status_code == 401
     msgs = client.get(f"/tasks/{task_id}/messages", headers=HEADERS_A).json()
     assert msgs[0]["receipt"] is None
 
@@ -147,9 +180,9 @@ def test_receipt_unknown_message_404():
     client = TestClient(app)
     task_id = _setup_task(client)
     r = client.post(
-        f"/tasks/{task_id}/messages/no-such-message/receipt",
-        json={"recipient_agent_id": "agent-b"},
-        headers=HEADERS_A,
+        _receipt_url(task_id, "no-such-message"),
+        json={},
+        headers=HEADERS_AGENT_B,
     )
     assert r.status_code == 404
 
@@ -165,40 +198,26 @@ def test_receipt_message_on_another_task_404():
     ).json()["task_id"]
     message = _send(client, task_id, "agent-a", "agent-b")
     r = client.post(
-        f"/tasks/{other}/messages/{message['message_id']}/receipt",
-        json={"recipient_agent_id": "agent-b"},
-        headers=HEADERS_A,
+        _receipt_url(other, message["message_id"]),
+        json={},
+        headers=HEADERS_AGENT_B,
     )
     assert r.status_code == 404
 
 
 def test_receipt_cross_tenant_404():
-    """Tenant B cannot receipt a message on tenant A's task: 404."""
+    """Agent B's tenant-b credential on a tenant-a task: 404, no leak."""
     from app.main import app
 
     client = TestClient(app)
     task_id = _setup_task(client)
     message = _send(client, task_id, "agent-a", "agent-b")
     r = client.post(
-        f"/tasks/{task_id}/messages/{message['message_id']}/receipt",
-        json={"recipient_agent_id": "agent-b"},
-        headers=HEADERS_B,
+        _receipt_url(task_id, message["message_id"]),
+        json={},
+        headers=HEADERS_AGENT_B_T2,
     )
     assert r.status_code == 404
     # Nothing recorded on A's side either.
     msgs = client.get(f"/tasks/{task_id}/messages", headers=HEADERS_A).json()
     assert msgs[0]["receipt"] is None
-
-
-def test_receipt_unknown_agent_400():
-    from app.main import app
-
-    client = TestClient(app)
-    task_id = _setup_task(client)
-    message = _send(client, task_id, "agent-a", "agent-b")
-    r = client.post(
-        f"/tasks/{task_id}/messages/{message['message_id']}/receipt",
-        json={"recipient_agent_id": "ghost"},
-        headers=HEADERS_A,
-    )
-    assert r.status_code == 400

@@ -23,7 +23,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from app import config
-from app.identity import require_api_key
+from app.identity import require_agent_auth, require_api_key
 from app import observability as audit
 from app import registry
 from app.messaging.bus import bus
@@ -148,6 +148,13 @@ class MessageIn(BaseModel):
 @app.post("/tasks/{task_id}/messages")
 def send_message(task_id: str, body: MessageIn, auth=Depends(require_api_key)):
     task = _get_task_for_tenant(task_id, auth["tenant_id"])
+    # Agent credential presented: the sender must be the authenticated
+    # agent (formal T01 identity binding). A tenant key keeps the old
+    # behaviour (sender must be a registered agent, checked below).
+    if auth.get("agent_id") is not None and body.sender_agent_id != auth["agent_id"]:
+        raise HTTPException(
+            status_code=403, detail="sender does not match authenticated agent"
+        )
     if not registry.get_agent(body.sender_agent_id):
         raise HTTPException(
             status_code=400, detail=f"sender agent {body.sender_agent_id} not found"
@@ -181,35 +188,44 @@ def list_messages(task_id: str, auth=Depends(require_api_key)):
 
 
 class ReceiptIn(BaseModel):
-    recipient_agent_id: str = Field(min_length=1)
+    # Optional cross-check only. The acting identity is always derived
+    # from the agent credential, never trusted from this field.
+    recipient_agent_id: str | None = None
 
 
 @app.post("/tasks/{task_id}/messages/{message_id}/receipt")
-def receipt_message(task_id: str, message_id: str, body: ReceiptIn, auth=Depends(require_api_key)):
+def receipt_message(task_id: str, message_id: str, body: ReceiptIn, auth=Depends(require_agent_auth)):
     """Delivery receipt (formal T01 acceptance).
 
-    The recipient confirms it received the message. Routing metadata only
-    proves the hub stored the message; the receipt proves the receiving
-    end got it. A duplicate receipt is a no-op returning the stored
-    receipt (stored=false). Unknown message, message on another task, or
-    cross-tenant message all return 404; a caller that is not the
-    message's recipient returns 400.
+    The recipient's identity comes from its agent credential
+    (require_agent_auth): a tenant key alone cannot receipt (401), a
+    credential for another agent cannot receipt this message (403), and
+    a suspended/unregistered agent's credential is rejected (401).
+    Routing metadata only proves the hub stored the message; the receipt
+    proves the receiving agent itself got it. A duplicate receipt is a
+    no-op returning the stored receipt (stored=false). Unknown message,
+    message on another task, or cross-tenant message all return 404.
     """
     _get_task_for_tenant(task_id, auth["tenant_id"])
-    if not registry.get_agent(body.recipient_agent_id):
+    recipient_id = auth["agent_id"]
+    if body.recipient_agent_id is not None and body.recipient_agent_id != recipient_id:
         raise HTTPException(
-            status_code=400, detail=f"recipient agent {body.recipient_agent_id} not found"
+            status_code=400,
+            detail="recipient_agent_id does not match authenticated agent",
         )
     try:
         result = bus.acknowledge(
             tenant_id=auth["tenant_id"],
             task_id=task_id,
             message_id=message_id,
-            recipient_agent_id=body.recipient_agent_id,
+            recipient_agent_id=recipient_id,
         )
     except ValueError as e:
         if str(e) == "recipient mismatch":
-            raise HTTPException(status_code=400, detail="caller is not the message recipient")
+            raise HTTPException(
+                status_code=403,
+                detail="authenticated agent is not the message recipient",
+            )
         raise HTTPException(status_code=404, detail="message not found")
     audit.record(
         auth["tenant_id"],

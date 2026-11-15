@@ -20,15 +20,26 @@ def _entry_hash(prev_hash, created_at, actor, action, target, detail) -> str:
 
 def record(actor: str, action: str, target: str, detail: dict | None = None) -> dict:
     detail = detail or {}
-    created_at = now_iso()
-    prev_hash = db.last_audit_hash()
-    entry_hash = _entry_hash(prev_hash, created_at, actor, action, target, detail)
-    seq = db.append_audit(prev_hash, entry_hash, created_at, actor, action, target, detail)
+
+    def build(prev_hash):
+        created_at = now_iso()
+        return {
+            "entry_hash": _entry_hash(prev_hash, created_at, actor, action, target, detail),
+            "created_at": created_at,
+            "actor": actor,
+            "action": action,
+            "target": target,
+            "detail": detail,
+        }
+
+    # Atomic append: the previous-hash read and the insert are one
+    # transaction, so concurrent agent processes cannot fork the chain.
+    seq, prev_hash, entry = db.append_audit_transaction(build)
     return {
         "seq": seq,
         "prev_hash": prev_hash,
-        "entry_hash": entry_hash,
-        "created_at": created_at,
+        "entry_hash": entry["entry_hash"],
+        "created_at": entry["created_at"],
         "actor": actor,
         "action": action,
         "target": target,

@@ -247,6 +247,51 @@ def append_audit(prev_hash, entry_hash, created_at, actor, action, target, detai
         return cur.lastrowid
 
 
+def append_audit_transaction(build):
+    """Append one audit entry atomically.
+
+    build(prev_hash) returns the entry dict (entry_hash, created_at,
+    actor, action, target, detail). The read of the previous hash and
+    the insert run inside a single BEGIN IMMEDIATE transaction, so two
+    concurrent appends can never read the same prev_hash and fork the
+    chain (the race that broke verification under concurrent agent
+    processes). Returns (seq, prev_hash, entry).
+    """
+    path = Path(config.DATABASE_PATH)
+    if path.parent != Path("."):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    conn.isolation_level = None  # manual transaction control
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT entry_hash FROM audit_log ORDER BY seq DESC LIMIT 1"
+        ).fetchone()
+        prev_hash = row["entry_hash"] if row else "GENESIS"
+        entry = build(prev_hash)
+        cur = conn.execute(
+            "INSERT INTO audit_log (prev_hash, entry_hash, created_at, actor, action, target, detail) VALUES (?,?,?,?,?,?,?)",
+            (
+                prev_hash,
+                entry["entry_hash"],
+                entry["created_at"],
+                entry["actor"],
+                entry["action"],
+                entry["target"],
+                json.dumps(entry["detail"]),
+            ),
+        )
+        seq = cur.lastrowid
+        conn.execute("COMMIT")
+        return seq, prev_hash, entry
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+
 def last_audit_hash():
     with connect() as conn:
         row = conn.execute(
