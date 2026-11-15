@@ -40,6 +40,13 @@ CREATE TABLE IF NOT EXISTS messages (
     payload TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS message_receipts (
+    message_id TEXT NOT NULL,
+    recipient_agent_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    received_at TEXT NOT NULL,
+    PRIMARY KEY (message_id, recipient_agent_id)
+);
 CREATE TABLE IF NOT EXISTS audit_log (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
     prev_hash TEXT NOT NULL,
@@ -176,6 +183,44 @@ def get_message_by_key(idempotency_key):
     return d
 
 
+def get_message_by_id(message_id):
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM messages WHERE message_id = ?",
+            (message_id,),
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["payload"] = json.loads(d["payload"])
+    return d
+
+
+def record_receipt(message_id, recipient_agent_id, tenant_id, received_at):
+    """Record a delivery receipt. Returns True if recorded, False if this
+    recipient already receipted the message (duplicate receipt is a no-op,
+    same at-least-once rule as duplicate deliveries)."""
+    with connect() as conn:
+        try:
+            conn.execute(
+                "INSERT INTO message_receipts VALUES (?,?,?,?)",
+                (message_id, recipient_agent_id, tenant_id, received_at),
+            )
+            conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+
+def get_receipt(message_id):
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM message_receipts WHERE message_id = ?",
+            (message_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def list_messages(task_id):
     with connect() as conn:
         rows = conn.execute(
@@ -186,6 +231,8 @@ def list_messages(task_id):
     for r in rows:
         d = dict(r)
         d["payload"] = json.loads(d["payload"])
+        # Delivery receipt, if the recipient has confirmed receipt.
+        d["receipt"] = get_receipt(d["message_id"])
         out.append(d)
     return out
 

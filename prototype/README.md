@@ -53,7 +53,17 @@ curl -s -X POST localhost:8000/tasks -H "X-API-Key: $KEY" \
 
 ## Fixes (Stage 0 baseline, Cue T01/T08)
 
-- **T01 two-way message round-trip** — `POST /tasks/{id}/messages` accepts
+- **T01 delivery receipt (formal T01 acceptance)** — `POST
+  /tasks/{id}/messages/{message_id}/receipt` with
+  `{"recipient_agent_id": "..."}` lets the receiving agent confirm
+  delivery. Routing metadata only proves the hub stored the message; the
+  receipt proves the receiving end got it. A duplicate receipt is a
+  no-op returning the stored receipt (`stored: false`). Unknown message,
+  message on another task, or cross-tenant message return 404; a caller
+  that is not the message's recipient returns 400. `GET
+  /tasks/{id}/messages` carries each message's `receipt` (null if none).
+  Backed by a `message_receipts` table; receipts are audit-logged as
+  `message.receipt` (duplicates as `message.receipt.duplicate`).
   an optional `recipient_agent_id`. A reply from the task's agent can now
   be routed back to the other party; previously the recipient was hardcoded
   to the task's agent, so every reply went to the sender itself. Omitting

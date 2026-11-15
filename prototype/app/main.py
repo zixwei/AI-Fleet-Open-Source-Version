@@ -10,7 +10,9 @@ Endpoints (all except /health require X-API-Key):
   GET  /tasks/{id}          get task status
   POST /tasks/{id}/status   move a task (submitted->working->completed/failed/cancelled)
   POST /tasks/{id}/messages send a message (idempotent on idempotency_key)
-  GET  /tasks/{id}/messages list messages for a task
+  POST /tasks/{id}/messages/{message_id}/receipt
+       recipient confirms delivery (formal T01 acceptance; idempotent)
+  GET  /tasks/{id}/messages list messages for a task (each carries its receipt, if any)
   GET  /audit               append-only audit log (hash-chained)
   GET  /audit/verify        verify the audit hash chain
   GET  /health              health check (no auth)
@@ -176,6 +178,46 @@ def send_message(task_id: str, body: MessageIn, auth=Depends(require_api_key)):
 def list_messages(task_id: str, auth=Depends(require_api_key)):
     _get_task_for_tenant(task_id, auth["tenant_id"])
     return bus.list_for_task(task_id)
+
+
+class ReceiptIn(BaseModel):
+    recipient_agent_id: str = Field(min_length=1)
+
+
+@app.post("/tasks/{task_id}/messages/{message_id}/receipt")
+def receipt_message(task_id: str, message_id: str, body: ReceiptIn, auth=Depends(require_api_key)):
+    """Delivery receipt (formal T01 acceptance).
+
+    The recipient confirms it received the message. Routing metadata only
+    proves the hub stored the message; the receipt proves the receiving
+    end got it. A duplicate receipt is a no-op returning the stored
+    receipt (stored=false). Unknown message, message on another task, or
+    cross-tenant message all return 404; a caller that is not the
+    message's recipient returns 400.
+    """
+    _get_task_for_tenant(task_id, auth["tenant_id"])
+    if not registry.get_agent(body.recipient_agent_id):
+        raise HTTPException(
+            status_code=400, detail=f"recipient agent {body.recipient_agent_id} not found"
+        )
+    try:
+        result = bus.acknowledge(
+            tenant_id=auth["tenant_id"],
+            task_id=task_id,
+            message_id=message_id,
+            recipient_agent_id=body.recipient_agent_id,
+        )
+    except ValueError as e:
+        if str(e) == "recipient mismatch":
+            raise HTTPException(status_code=400, detail="caller is not the message recipient")
+        raise HTTPException(status_code=404, detail="message not found")
+    audit.record(
+        auth["tenant_id"],
+        "message.receipt" if result["stored"] else "message.receipt.duplicate",
+        task_id,
+        {"message_id": message_id, "stored": result["stored"]},
+    )
+    return result
 
 
 @app.get("/audit")

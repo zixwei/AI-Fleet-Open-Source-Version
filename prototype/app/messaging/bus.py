@@ -43,6 +43,41 @@ class MessageBus:
         """Retry a delivery with the same envelope (same idempotency key)."""
         return self.publish(envelope)
 
+    def acknowledge(
+        self,
+        *,
+        tenant_id: str,
+        task_id: str,
+        message_id: str,
+        recipient_agent_id: str,
+    ) -> dict:
+        """Record a delivery receipt from the receiving agent.
+
+        The receipt is what formal T01 checks: routing metadata alone only
+        proves the hub stored the message, not that the recipient got it.
+        Returns {"stored": bool, "receipt": dict}; stored=False means this
+        recipient already receipted the message (duplicate receipt no-op).
+        Raises ValueError("not found") when the message does not exist, is
+        not on this task, or belongs to another tenant (all reported as
+        404, so existence is never leaked); ValueError("recipient mismatch")
+        when the caller is not the message's recipient.
+        """
+        from app.messaging import now_iso
+
+        message = db.get_message_by_id(message_id)
+        if (
+            not message
+            or message["task_id"] != task_id
+            or message["tenant_id"] != tenant_id
+        ):
+            raise ValueError("not found")
+        if message["recipient_agent_id"] != recipient_agent_id:
+            raise ValueError("recipient mismatch")
+        stored = db.record_receipt(
+            message_id, recipient_agent_id, tenant_id, now_iso()
+        )
+        return {"stored": stored, "receipt": db.get_receipt(message_id)}
+
     def list_for_task(self, task_id: str):
         return db.list_messages(task_id)
 
