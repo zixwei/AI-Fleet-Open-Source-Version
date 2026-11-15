@@ -2,6 +2,8 @@
 
 AI Fleet cross-vendor agent collaboration platform — open-source, self-hostable. A2A + MCP.
 
+![AI Fleet in action: every agent in sync, sharing context on the same task](docs/solution-illustration.webp)
+
 ## The Problem
 
 ![A man overwhelmed because the AI agents around him do not share context](docs/problem-illustration.webp)
