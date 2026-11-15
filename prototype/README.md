@@ -48,8 +48,27 @@ curl -s -X POST localhost:8000/tasks -H "X-API-Key: $KEY" \
 ## Test
 
 ```bash
-.venv/bin/python -m pytest tests/test_smoke.py -q
+.venv/bin/python -m pytest tests/ -q
 ```
+
+## Fixes (Stage 0 baseline, Cue T01/T08)
+
+- **T01 two-way message round-trip** — `POST /tasks/{id}/messages` accepts
+  an optional `recipient_agent_id`. A reply from the task's agent can now
+  be routed back to the other party; previously the recipient was hardcoded
+  to the task's agent, so every reply went to the sender itself. Omitting
+  the field keeps the old default (the task's agent). Sender and recipient
+  must both be registered agents (400 otherwise).
+- **T08 cross-tenant isolation** — every task object endpoint (`GET`
+  `/tasks/{id}`, status, messages) checks the task belongs to the caller's
+  tenant; a cross-tenant id returns 404 (never 403, so existence is not
+  leaked). Task list and audit list are tenant-scoped too.
+- **Multi-tenant keys** — set `AI_FLEET_TENANT_API_KEYS` to a JSON map of
+  API key to tenant id, e.g. `{"key-a": "tenant-a", "key-b": "tenant-b"}`,
+  to test with distinct tenants. Without it, the single `AI_FLEET_API_KEY`
+  maps to `DEFAULT_TENANT` as before.
+- **GET /audit fixed** — it previously called a missing function; it now
+  returns the caller's own tenant entries.
 
 ## What is NOT claimed
 

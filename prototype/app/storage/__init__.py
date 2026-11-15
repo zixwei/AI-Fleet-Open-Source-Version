@@ -208,11 +208,17 @@ def last_audit_hash():
     return row["entry_hash"] if row else "GENESIS"
 
 
-def list_audit(limit=100):
+def list_audit(limit=100, actor=None):
     with connect() as conn:
-        rows = conn.execute(
-            "SELECT * FROM audit_log ORDER BY seq DESC LIMIT ?", (limit,)
-        ).fetchall()
+        if actor is not None:
+            rows = conn.execute(
+                "SELECT * FROM audit_log WHERE actor = ? ORDER BY seq DESC LIMIT ?",
+                (actor, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM audit_log ORDER BY seq DESC LIMIT ?", (limit,)
+            ).fetchall()
     out = []
     for r in rows:
         d = dict(r)

@@ -103,12 +103,19 @@ def list_tasks(auth=Depends(require_api_key)):
     return orchestration.list_tasks(auth["tenant_id"])
 
 
-@app.get("/tasks/{task_id}")
-def get_task(task_id: str, auth=Depends(require_api_key)):
+def _get_task_for_tenant(task_id: str, tenant_id: str) -> dict:
+    """Object-level authorization (T08 fix): a task is visible only to the
+    tenant that owns it. A cross-tenant id returns 404, never 403, so the
+    response does not leak whether the task exists."""
     task = orchestration.get_task(task_id)
-    if not task:
+    if not task or task["tenant_id"] != tenant_id:
         raise HTTPException(status_code=404, detail="task not found")
     return task
+
+
+@app.get("/tasks/{task_id}")
+def get_task(task_id: str, auth=Depends(require_api_key)):
+    return _get_task_for_tenant(task_id, auth["tenant_id"])
 
 
 class StatusIn(BaseModel):
@@ -117,6 +124,7 @@ class StatusIn(BaseModel):
 
 @app.post("/tasks/{task_id}/status")
 def set_task_status(task_id: str, body: StatusIn, auth=Depends(require_api_key)):
+    _get_task_for_tenant(task_id, auth["tenant_id"])
     try:
         task = orchestration.set_status(task_id, body.status)
     except ValueError as e:
@@ -127,19 +135,30 @@ def set_task_status(task_id: str, body: StatusIn, auth=Depends(require_api_key))
 
 class MessageIn(BaseModel):
     sender_agent_id: str = Field(min_length=1)
+    # T01 fix: the caller may name the recipient. A reply from the task's
+    # agent goes back to the other party, not to itself. When omitted, the
+    # recipient defaults to the task's agent (previous behaviour).
+    recipient_agent_id: str | None = None
     event_type: str = Field(min_length=1)
     payload: dict = {}
 
 
 @app.post("/tasks/{task_id}/messages")
 def send_message(task_id: str, body: MessageIn, auth=Depends(require_api_key)):
-    task = orchestration.get_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="task not found")
+    task = _get_task_for_tenant(task_id, auth["tenant_id"])
+    if not registry.get_agent(body.sender_agent_id):
+        raise HTTPException(
+            status_code=400, detail=f"sender agent {body.sender_agent_id} not found"
+        )
+    recipient_id = body.recipient_agent_id or task["agent_id"]
+    if not registry.get_agent(recipient_id):
+        raise HTTPException(
+            status_code=400, detail=f"recipient agent {recipient_id} not found"
+        )
     result = bus.send(
         tenant_id=auth["tenant_id"],
         sender_agent_id=body.sender_agent_id,
-        recipient_agent_id=task["agent_id"],
+        recipient_agent_id=recipient_id,
         task_id=task_id,
         event_type=body.event_type,
         payload=body.payload,
@@ -155,14 +174,15 @@ def send_message(task_id: str, body: MessageIn, auth=Depends(require_api_key)):
 
 @app.get("/tasks/{task_id}/messages")
 def list_messages(task_id: str, auth=Depends(require_api_key)):
-    if not orchestration.get_task(task_id):
-        raise HTTPException(status_code=404, detail="task not found")
+    _get_task_for_tenant(task_id, auth["tenant_id"])
     return bus.list_for_task(task_id)
 
 
 @app.get("/audit")
 def list_audit(limit: int = 100, auth=Depends(require_api_key)):
-    return audit.list_audit(limit)
+    # T08: audit entries are scoped to the caller's tenant (actor is the
+    # tenant id). The chain itself is still verified whole in /audit/verify.
+    return audit.list_audit(limit, actor=auth["tenant_id"])
 
 
 @app.get("/audit/verify")

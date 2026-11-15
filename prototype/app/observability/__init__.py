@@ -36,6 +36,12 @@ def record(actor: str, action: str, target: str, detail: dict | None = None) -> 
     }
 
 
+def list_audit(limit: int = 100, actor: str | None = None) -> list:
+    """List audit entries, newest first. When actor is given, only that
+    tenant's entries are returned (T08: no cross-tenant audit reads)."""
+    return db.list_audit(limit=limit, actor=actor)
+
+
 def verify_chain(limit: int = 1000) -> dict:
     """Recompute the chain over the most recent entries. Returns ok/False
     plus the first broken sequence, if any."""
