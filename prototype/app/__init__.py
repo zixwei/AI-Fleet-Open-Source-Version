@@ -1,4 +1,4 @@
-"""AI Fleet Hub - Stage 0 deliverable #1: runnable minimal technical prototype.
+"""Agent Fleet Hub - Stage 0 deliverable #1: runnable minimal technical prototype.
 
 Modular monolith (plan v0.2.6 §4): six logical modules as packages, one
 deployable process. Persistence is SQLite here (dev, no Docker on this host);

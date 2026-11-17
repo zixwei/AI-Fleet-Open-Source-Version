@@ -1,4 +1,4 @@
-# AI Fleet Hub - Stage 0 deliverable #1: runnable minimal technical prototype
+# Agent Fleet Hub - Stage 0 deliverable #1: runnable minimal technical prototype
 #
 # Reference deployment (plan v0.2.6 §23). Versions are frozen in
 # docs/ENVIRONMENT.md. The api service runs the modular monolith; Postgres

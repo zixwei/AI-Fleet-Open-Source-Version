@@ -1,4 +1,4 @@
-"""AI Fleet Hub - Core API (modular monolith, Stage 0 deliverable #1).
+"""Agent Fleet Hub - Core API (modular monolith, Stage 0 deliverable #1).
 
 Endpoints (all except /health require X-API-Key):
   POST /agents              register an agent (manual registration, Pending)
@@ -30,7 +30,7 @@ from app.messaging.bus import bus
 from app import orchestration
 from app import storage as db
 
-app = FastAPI(title="AI Fleet Hub", version="0.1.0-stage0")
+app = FastAPI(title="Agent Fleet Hub", version="0.1.0-stage0")
 
 
 @app.on_event("startup")
@@ -40,7 +40,7 @@ def startup():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "ai-fleet-hub", "version": "0.1.0-stage0"}
+    return {"status": "ok", "service": "agent-fleet-hub", "version": "0.1.0-stage0"}
 
 
 class AgentIn(BaseModel):
